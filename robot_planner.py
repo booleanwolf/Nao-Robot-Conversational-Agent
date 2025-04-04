@@ -40,38 +40,12 @@ class RobotPlanner:
         self.model = "gpt-3.5-turbo-16k"
         self.max_completion_length = 1000
     
-    def determine_approach(self, instruction):
-        """Determine whether to use reasoning, search or general approach"""
 
-        messages = [
-            {"role": "system", "content": "You are an AI that determines the best approach to handle instructions. "
-                                         "Analyze the instruction and decide if it requires: "
-                                         "1. 'search' - Needs factual or current information from the internet "
-                                         "2. 'general' - Can be handled with general knowledge "
-                                         "Return ONLY ONE of these three words without explanation."},
-            {"role": "user", "content": f"Instruction: {instruction}"}
-        ]
-
-        response = openai.ChatCompletion.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=self.max_completion_length,
-                top_p=0.4,
-                frequency_penalty=0.0,
-                presence_penalty=0.0
-            )
-        
-        if "search" in response['choices'][0]['message']['content']:
-            return "search"
-        else:
-            return "general"
-
-    def generate_plan(self, instruction):
+    def generate_plan(self, instruction, memory=""):
         print(f"Generating plan for instruction: {instruction}")
 
     
-        system_prompt = """You are a NAO robot. Your task is to have a natural conversation with a user and perform actions based on their instructions.       
+        system_prompt = """You are a NAO robot with memory. Your task is to have a natural conversation with a user and perform actions based on their instructions.        
         The available actions are:
         - speak(speech=text): Make the robot say the specified text
         - stand(): Make the robot stand up
@@ -102,21 +76,13 @@ class RobotPlanner:
         YOU MUST Return to the default pose after each action to prepare for the next interaction.
         """
 
-        if self.determine_approach(instruction) == "search":
-            print("Generating response based on Internet Search...")
-            search_context = search_the_net(instruction)
-             
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"From net: {search_context}"},
-                {"role": "user", "content": f"Instruction: {instruction}\n\nCreate a detailed action plan for the NAO robot. Also based on the net information answer the user."}
-            ]
-        else:
-            print("Generating response...")
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Instruction: {instruction}\n\nCreate a detailed action plan for the NAO robot."}
-            ]
+        
+        print("Generating response...")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role" : "system", "content": f"Previous Memory/Searched info from net: {memory}"},
+            {"role": "user", "content": f"Instruction: {instruction}\n\nCreate a detailed action plan for the NAO robot."}
+        ]
         
         try:
             print("Sending request to OpenAI API...")

@@ -6,6 +6,9 @@ import chromadb
 # from openai import OpenAI 
 import openai
 from datetime import datetime
+import json
+import re
+import http.client
 
 # client = OpenAI()
 
@@ -56,12 +59,18 @@ def execute_plan(nao, plan):
         
         time.sleep(1.0)  # Add a delay between actions for better visualization
 
+client_chroma = chromadb.Client()
+
+COLLECTION_EPISODIC = client_chroma.create_collection("episodic_collection")
+COLLECTION_SEMANTIC = client_chroma.create_collection("semantic_collection")
+COLLECTION_PROCEDURAL = client_chroma.create_collection("procedural_collection")
+
 class Database():
     def __init__(self):
         self.client = chromadb.Client()
-        self.collections_episodic = self.client.create_collection("episodic_collection")
-        self.collections_semantic = self.client.create_collection("semantic_collection")
-        self.collections_procedural = self.client.create_collection("procedural_collection")
+        self.collections_episodic = COLLECTION_EPISODIC
+        self.collections_semantic = COLLECTION_SEMANTIC
+        self.collections_procedural = COLLECTION_PROCEDURAL
   
     def embed(self, messages):
         response = openai.Embedding.create(
@@ -74,8 +83,9 @@ class Database():
     
     def save_semantic_memory(self, knowledge):
         embeddings = self.embed(knowledge)
+       
         ids = [datetime.now().strftime("%Y-%m-%d_%H-%M-%S") for _ in knowledge]
-
+      
 
         self.collections_semantic.add(
             documents=knowledge,
@@ -83,11 +93,14 @@ class Database():
             ids= ids
         )
 
+        print(f"{knowledge} saved in semantic memory")  
+
         return "Added to collection!"
     
     def save_episodic_memory(self, knowledge):
         embeddings = self.embed(knowledge)
         ids = [datetime.now().strftime("%Y-%m-%d_%H-%M-%S") for _ in knowledge]
+
 
         self.collections_episodic.add(
             documents=knowledge,
@@ -95,17 +108,23 @@ class Database():
             ids= ids
         )
 
+        print(f"{knowledge} saved in episodic memory")
+
+
         return "Added to collection!"
 
     def save_procedural_memory(self, knowledge):
         embeddings = self.embed(knowledge)
         ids = [datetime.now().strftime("%Y-%m-%d_%H-%M-%S") for _ in knowledge]
+
+        
         
         self.collections_procedural.add(
             documents=knowledge,
             embeddings=embeddings,
             ids=ids
         )
+        print(f"{knowledge} saved in procedural memory")
 
         return "Added to collection!"
 
@@ -113,33 +132,63 @@ class Database():
         query_embedding = self.embed([query])
         results = self.collections_semantic.query(
             query_embeddings=query_embedding,
-            n_results=3  # Return top 3 results
+            n_results=1  # Return top 3 results
         )
+        if results["documents"][0]:
+            s = results["documents"][0]
+            print(f"Found {s}")
 
-        return results 
+            return results["documents"][0]
 
     
     def search_episodic_memory(self, query):
         query_embedding = self.embed([query])
         results = self.collections_episodic.query(
             query_embeddings=query_embedding,
-            n_results=3  # Return top 3 results
+            n_results=1 # Return top 3 results
         )
+        if results["documents"][0]:
+            s = results["documents"][0]
+            print(f"Found {s}")
 
-        return results 
+            return results["documents"][0]
 
     def search_procedural_memory(self, query):
         query_embedding = self.embed([query])
         results = self.collections_procedural.query(
             query_embeddings=query_embedding,
-            n_results=3  # Return top 3 results
+            n_results=1 # Return top 3 results
         )
+        if results["documents"][0]:
+            s = results["documents"][0]
+            print(f"Found {s}")
+
+            return results["documents"][0]
 
         return results 
 
+    def search_web(self, query):
+        conn = http.client.HTTPSConnection("google.serper.dev")
+        payload = json.dumps({
+        "q": query
+        })
+        headers = {
+        'X-API-KEY': '428d5c35b8de994c8af5bcf72aa21f2a36ca4755',
+        'Content-Type': 'application/json'
+        }
+        conn.request("POST", "/search", payload, headers)
+        res = conn.getresponse()
+        data = res.read()
+
+        return [data.decode("utf-8")]
+
+database = Database()
+    # def add_two(self, a, b, c):
+    #     return a + b + c
+
 class MemoryToolExecutor():
     def __init__(self):
-        self.instance = Database()
+        self.instance = database
 
     def execute_method(self, method_name, *args, **kwargs):
         # Get the method from the instance using getattr()
@@ -150,10 +199,34 @@ class MemoryToolExecutor():
             return method(*args, **kwargs)
         else:
             raise ValueError(f"Method '{method_name}' not found or is not callable on the instance.")
+    
+    def execute_memory_plan(self, tools_response):
+        searched_info = ""
+        
+        tr_modified = re.sub(r'(\(.*?)(\".*?\")(.*?\))', lambda match: match.group(0).replace('"', '\\"'), tools_response)
+        # print(tr_modified)
+
+        data = json.loads(tr_modified)
+        
+        for tool in data["tools"]:
+            # Parse the function name and arguments
+            function_name = tool.split('(')[0]
+            arguments = tool.split('(')[1].split(')')[0].strip("'")
+            print(f"Executing {function_name} with {arguments}")
+            
+            # Call execute_method
+            if "search" in function_name:
+                info = self.execute_method(function_name, arguments)
+                if info:
+                    searched_info += ", ".join(map(str, info)) 
+            else:
+                self.execute_method(function_name, [arguments])
+            
+        return searched_info
 
 class MemoryAgent():
     def __init__(self):
-        self.model = "gpt-3.5-turbo-16k"
+        self.model = "gpt-4o-mini"
         self.max_completion_length = 1000
         self.system_prompt =  """You are a helpful chatbot.
             You are a  NAO Robot with advanced long-term memory. Memories are saved with conversation date.
@@ -209,48 +282,105 @@ class MemoryAgent():
 
         return response['choices'][0]['message']['content']
     
-    def execute_plan(self, tools):
+    def execute_plan(self, tools_response):
         pass 
 
 
+class Episode():
+    def __init__(self):
+        pass
+
 if __name__ == "__main__":
     # Initialize the Nao robot
-    # nao = Nao(gui=True)
-    # time.sleep(1.0)  # Allow time for the robot to initialize
+    nao = Nao(gui=True)
+    time.sleep(1.0)  # Allow time for the robot to initialize
 
-    # # Initialize the RobotPlanner
-    # planner = RobotPlanner()
+    # Initialize the RobotPlanner
+    planner = RobotPlanner()
+    executor = MemoryToolExecutor()
+    mem = MemoryAgent()
 
-    # # Continuous input loop
-    # while True:
-    #     # Prompt the user for an instruction
-    #     instruction = input("\nEnter an instruction for Nao (or type 'stop' to end): ")
+    username = input("Username: ")
+    # Continuous input loop
+    while True:
+        # Prompt the user for an instruction
+        instruction = input("\nTalk with the robot (or type 'stop' to end): ")
         
-    #     # Stop execution if the user types "stop"
-    #     if instruction.lower() == "stop":
-    #         print("Stopping the Nao robot.")
-    #         break
+        # Stop execution if the user types "stop"
+        if instruction.lower() == "stop":
+            print("Stopping the Nao robot.")
+            break
+
+        memory_tools_response = mem.generate_memory_plan(f"Username: {username}, Query: {instruction}")
+        saved_info = executor.execute_memory_plan(memory_tools_response)
+
+        memory = ""
+        if saved_info:
+            print(f" Saved info: {saved_info}")
+            memory = saved_info
+            # exit()
+            # memory = " ".join(saved_info["documents"])  
+
+        # Generate the action plan
+        print(f"{username} is asking you, {instruction}. Previous memory of {username}: {memory}")
+
+        formatted_instruction = f"{username} says, {instruction}"
+
+        plan = planner.generate_plan(formatted_instruction, memory)
+
+        # Execute the plan
+        if plan:
+            execute_plan(nao, plan)
+        else:
+            print("Failed to generate a plan")
+
+    # Stop the nao
+    nao.shutdown()
+
+
+
         
-    #     # Generate the action plan
-    #     print(f"Generating plan for instruction: {instruction}")
-    #     plan = planner.generate_plan(instruction)
+    
+    # tr = r"""{
+    # "tools": [
+    #     "save_episodic_memory("Tamim prefers short responses.")",
+    #     "save_semantic_memory("Tamim prefers responses in Bangla.")"
+    # ]
+    # }"""
+   
 
-    #     # Execute the plan
-    #     if plan:
-    #         execute_plan(nao, plan)
-    #     else:
-    #         print("Failed to generate a plan")
+#     tr_modified = re.sub(r'(\(.*?)(\".*?\")(.*?\))', lambda match: match.group(0).replace('"', '\\"'), tr)
 
-    # # Stop the nao
-    # nao.shutdown()
+#     print(tr_modified)
 
-    # mem = MemoryAgent()
-    # print(mem.generate_memory_plan("Username: Tamim, Query: What is the president of usa? "))
+# #     a = r"""{
+# #     "tools": [
+# #         "save_episodic_memory(\"Tamim prefers short responses.\")",
+# #         "save_semantic_memory(\"Tamim prefers responses in Bangla.\")"
+# #     ]
+# # }"""
 
-    # db = Database()
-    # texts = ["Hello, how are you?"]
+#     # Convert the string to JSON
+#     parsed_json = json.loads(tr_modified)
 
-    # embedding = db.embed(texts)
-    # db.save_semantic_memory(texts)
-    # print(db.search_semantic_memory("How")["documents"])
+#     # Print the resulting JSON
+#     print(parsed_json)
+ 
+    
+#     texts = ["Tamim's hate person is Halima"]
+
+#     database.save_semantic_memory(texts)
+    
+    
+#     texts = ["Tamim's favourite person is Halima"]
+
+#     database.save_semantic_memory(texts)
+
+#     results = database.collections_semantic.get()
+#     print(database.search_semantic_memory("Favourite")["documents"])
+# # Print the documents
+#     print("Getting all the results")
+#     for result in results['documents']:
+#         print(result)
+
     pass 
