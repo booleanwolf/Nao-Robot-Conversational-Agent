@@ -1,0 +1,3 @@
+qibullet==1.4.6
+pyttsx3
+opencv-python
